@@ -1,0 +1,591 @@
+---
+title: "rapport-projet-se"
+output: html_document
+author: "Lila HAMEL"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r librairies utilisées, include=FALSE}
+library(readxl)
+library(readr)
+library(Hmisc)
+library(corrplot)
+library(ggplot2)
+library(FactoMineR)
+library(factoextra)
+library(philentropy)
+library(formattable)
+library(knitr)
+library(dbplyr)
+```
+
+
+```{r lecture du fichier de données, include=FALSE}
+ClientsBanque <- read.table("/home/lila/Documents/GIS4/semestre1/SE/TP5/ClientsBanque.csv", 
+    colClasses=as.numeric(), head=TRUE,sep=";")
+id_clients <- ClientsBanque$Clients
+ClientsBanque <- ClientsBanque[, c(-1, -15)]
+rownames(ClientsBanque) <- id_clients
+ClientsBanque <- as.data.frame(ClientsBanque)
+for( i in 1:ncol(ClientsBanque))
+  ClientsBanque[,i]=as.numeric(ClientsBanque[,i])
+head(ClientsBanque)
+```
+
+
+
+# Objectif 
+
+Définit des types de clients pour que la banque puisse adopter une politique différenciée pour chacun d'eux. 
+Ici, on 13 variables sont quantitatives qui caractérisent les individus (clients). On va donc effectuer une ACP normée, qui va permettre de représenter fiablement le tableau de données mais avec moins de variables (deux ou trois). Ces variables seront des combinaisons linéaires des variables initiales. Ce qui va permettre de visuliser les individus dans le nouvel espace de ces variables et de dégager des tendances. Puis, on va utiliser une classification hiérarchique pour pouvoir regrouper les clients dans des clusters. 
+
+# Partie 1 : Analyse en Composantes Principales normée
+
+Avec l'ACP on va identifier les directions sur lequelles la variance des données est maximale. De ce fait, on conserve le maximum d'information des données d'origine.
+
+### Statistiques descriptives 
+
+Les statistiques descriptives servent à se faire une idée des variables qui sont plus ou moins intéressantes, c'est à dire qui pourraient discriminer les individus, et aussi de construire la matrice de corrélation qui va aider à identifier les variables corrélées entre elles. Ce sont ces variables qui permettent de se ramener à une plus petite dimension puisqu'une forte corrélation linéaire voudrait dire qu'il y a de la redondance. 
+
+Plus précisement, pour une ACP normée, les statistiques descriptives fournissent les valeurs des moyennes et des variances de chaque variable. Ce qui va servir à standardiser les données pour les ramener à la même échelle, et donc que le poids variable ne soit pas considéré plus grand juste parce que toutes ses valeurs sont très grandes ou très petites.
+```{r statistiques descriptives, include=FALSE}
+described_data <- psych::describe(ClientsBanque)
+described_data
+```
+
+* SOLD : le solde
+  
+    + **moyenne** : $10869.52$
+    + **écart-type** : $16017.19$	
+    + **median** : $6015.5$	
+    + **min** : $231$
+    + **max** : $85214$	
+    
+    L'**écart-type** de cette variable est très très grande, et comme les valeurs **extrêmes** le montrent, les soldes varient beaucoup d'un client à un autre. On voit aussi que $50\%$ des clients ont un solde inférieur à $6015.5$ ce qui est très bas comparé à la **moyenne**.
+
+
+* AGE : l'âge
+
+    + **moyenne** : $39.92$
+    + **écart-type** : $14.15$
+    + **median** : $39.5$
+    + **min** : $18$
+    + **max** : $78$
+    
+    On voit que la tranche d'âge des clients de la banque est assez large. Toutefois $50\%$ des clients de la banque ont moins de $39.5$ ans, donc la moitié de la clientèle est jeune. 
+    
+* TAIL : la taille du ménage
+
+    + **moyenne** : $2.78$
+    + **écart-type** : $1.71$
+    + **median** : $2.5$
+    + **min** : $1$
+    + **max** : $9$
+
+    On voit que la taille du ménage possédant des comptes dans la banque varie entre $1$ et $9$ personnes. La **moyenne** reste petite, et selon l'**écart-type**, la taille est majoritairement comprise entre $1$ et $4$ 
+
+
+```{r, echo=FALSE}
+par(mfrow=c(1,3))
+boxplot(data=ClientsBanque[, 1:6] ,ClientsBanque$SOLD, ylab="Sold")
+boxplot(data=ClientsBanque[, 1:6] ,ClientsBanque$AGEC, ylab="Age")
+boxplot(data=ClientsBanque[, 1:6] ,ClientsBanque$TAIL, ylab="Taille du ménage")
+```
+
+
+* NEMP :  Nombre des emprunts
+
+    + **moyenne** : $2.04$
+    + **écart-type** : $4.39$
+    + **median** : $1.0$
+    + **min** : $0$
+    + **max** : $30$
+    
+    On voit qu'en **moyenne**, un client a contracté $2$ emprunts l'année dernière. Mais $50\%$ des clients ont en contracté au maximum $1$. On remaque aussi qu'il y a des clients qui ont beaucoup emprunté. 
+    
+* MEMP :  Montant des emprunts
+
+    + **moyenne** : $8.66$
+    + **écart-type** : $8.19$
+    + **median** : $6.5$
+    + **min** : $1$
+    + **max** : $25$
+    
+    Le montant des emprunts varie entre $1000€$ et $25000€$. En **moyenne** la somme totale des emprunts d'un client est de $8660€$, avec un écart-type assez grand $8190€$, donc il y a une forte variance dans les valeurs des emprunts. 
+    
+```{r , echo=FALSE}
+par(mfrow=c(1,2))
+boxplot(data=ClientsBanque[, 1:6] ,ClientsBanque$NEMP, ylab="Nombre d'emprunts")
+boxplot(data=ClientsBanque[, 1:6] ,ClientsBanque$MEMP, ylab="Montant des emprunts")
+```
+
+### Dresser la matrice des corrélations linéaires
+On va utiliser la fonction rcorr de R afin de calculer la matrice de corrélation et les p-values en même temps.
+
+##### Corrélation positives 
+On observe une corrélation forte $(0.72)$ entre les variables **NDEC** et **MDEC**, c'est à dire que le nombre et le montant des découverts du client varient dans la même direction.
+La p-value vaut $5.03e-09$ ce qui est très très au dessous du seuil fixé $0.005$. On déduit alors que cette corrélation est très significative. 
+
+Il y a aussi une forte corrélation $(0.63)$ entre **VADO$** et **SOLD**. Mais cette relation n'est pas significative puisque la p-value vaut $0.0088$.
+
+Par contre la corrélation entre **VADO** et **DEPO** est significative dans les $99.98\%$ des cas avec un coefficient de corrélation qui vaut $0.50$. Il y aurait donc une relation linéaire entre le pourcentage de variation des dépôts d'épargne et la montant total des comptes épargne d'un client. 
+
+##### Corrélations négatives 
+La corrélation entre **MEMP** et **VADO** vaut $-0.457$. La p-value vaut $8.41e-04$ donc elle est significative. Ces deux variables varient donc dans directions opposées.
+
+On observe une corrélation négative $(-0.453)$ entre **AGEC** et **NDEC**. Ce coefficient a $0.094\%$ de chance d'être nul.
+
+Et enfin, on retient la corrélation entre **NDEC** et **VADO** qui vaut $-0.40$ qui est significative car la p-value vaut $0.003$ ce qui est tout de même inférieur à $0.005$.
+
+```{r}
+mcor <- rcorr(data.matrix(ClientsBanque))
+corrplot(mcor$r, type="upper", order="hclust", tl.col="black", tl.srt=45)
+```
+
+
+### Démarche de calcul de la matrice de corrélation 
+
+La matrice de corrélation est obtenu en calculant le coefficient de corrélation entre tous les couples des variables. Le coefficient est égale à $\frac{E(X1X2) -E(X1)E(X2)}{\sigma_{X2}\sigma_{X2}}$.
+
+### Réalisation de l'ACP normée 
+
+On active l'option scale.unit pour que les données soiet standardisées/normalisées avant l’analyse.
+
+```{r}
+ClientsBanque.active<- ClientsBanque[1:11]
+ClientsBanque.acp <- PCA(ClientsBanque, quanti.sup = 12:13, scale.unit = TRUE, graph = FALSE)
+```
+
+##### Calculer de deux manières l'inertie du tableau de données 
+
+
+1. Comme il s'agit de données quantitatives, on utilise la matrice de variance-covariance pour calculer les composantes principales. Il faut remarque qu'avec les donénes standardisées, la variance de chaque variable est égale à $1$. On sait que l'inertie est égale à la somme des valeurs prores de cette matrice, qui est égale à sa trace. Comme il y a $11$ variables, alors $11 * 1 = 11$. Donc l'inertie vaut $11$.
+
+
+2. En utilisant le résultat de l'ACP : en sommant les valeurs propres des axes. 
+```{r}
+sum(ClientsBanque.acp$eig[,1])
+```
+
+##### Tracer la courbe des valeurs propres 
+
+
+```{r}
+fviz_eig(ClientsBanque.acp, addlabels = TRUE, ylim = c(0, 30))
+```
+
+##### Choix du nombre d'axes factoriels
+
+Si on utilise le critère de Kaiser, on ne retiendra que les axes qui retiennent plus de $9.09\%$ de l'information totale, mais celà implique de retenir que les quatre premiers axes qui ne couvrent que $68.21\%$ de la variance, ce qui reste peu.
+
+Le critère du coude suggère de retenir les deux premiers axes qui ne retiennent que $47.36\%$ de la variance, car on observe le décrochement au troisième axe puis une décroissance assez régulière. C'est à dire qu'on perd plus de la moitié de l'information.
+
+On peut donc choisir de retenir les $5 / 6$ premiers axes. Ce qui est satisfaisant car ils retiennent $76.35\% / 83.47\%$ de l'inertie totale. 
+
+```{r}
+ClientsBanque.acp$eig
+```
+#### Interprétation des 5 premiers axes par rapport aux variables actives 
+```{r}
+fviz_contrib(ClientsBanque.acp, choice = "var", axes = 1, top = 5)
+```
+
+* AXE 1:
+
+    Les variables contribuant le plus à la formation de cet axe: 
+    
+    + VADO : $23.32\%$
+    + SOLD : $19.89\%$
+    + NDEC : $11.82\%$
+    + MDEC : $11.24\%$
+
+```{r}
+fviz_contrib(ClientsBanque.acp, choice = "var", axes = 2, top = 5)
+```
+
+* AXE 2:
+
+    Les variables contribuant le plus à la formation de cet axe: 
+    
+    + NBPR : $28.38\%$
+    + NEMP : $21.93\%$
+    + RETR : $17.62\%$
+    + NDEC : $11.18\%$
+    
+```{r}
+fviz_contrib(ClientsBanque.acp, choice = "var", axes = 3, top = 5)
+```
+
+* AXE 3:
+
+    Les variables contribuant le plus à la formation de cet axe: 
+    
+    + VARR : $39.33\%$
+    + MEMP : $22.76\%$
+    + DEPO : $21.08\%$
+
+```{r}
+fviz_contrib(ClientsBanque.acp, choice = "var", axes = 4, top = 5)
+```
+* AXE 4:
+
+    Les variables contribuant le plus à la formation de cet axe: 
+    
+    + MDEC : $35.07\%$
+    + NDEC : $15.33\%$
+    + DEPO : $12.93\%$
+ 
+ ```{r}
+fviz_contrib(ClientsBanque.acp, choice = "var", axes = 5, top = 5)
+```   
+
+* AXE 5:
+
+    Les variables contribuant le plus à la formation de cet axe: 
+    
+    + VARR : $24.18\%$
+    + MEMP : $23.93\%$
+    + NBPR : $19.04\%$
+    + CHEQ : $15.03\%$
+
+```{r}
+library(dplyr)
+cos2 <- as.data.frame(ClientsBanque.acp$var$cos2)
+cos2 %>%
+mutate(`Variables`= rownames(cos2), `Dim 1`=round(`Dim.1`, 2), `Dim 2`=round(`Dim.2`, 2), `Dim 3`=round(`Dim.3`, 2), `Dim 4`=round(`Dim.4`, 2), `Dim 5`=round(`Dim.5`, 2)) %>% 
+select(`Variables`, `Dim 1`, `Dim 2`, `Dim 3`, `Dim 4`, `Dim 5`) %>% 
+formattable(align=rep('c',4), list(`Dim 1`=color_tile("#DeF7E9", "#71CA97"), `Dim 2`=color_tile("#DeF7E9", "#71CA97"), `Dim 3`=color_tile("#DeF7E9", "#71CA97"), `Dim 4`=color_tile("#DeF7E9", "#71CA97"), `Dim 5`=color_tile("#DeF7E9", "#71CA97")))
+```
+
+* AXE 1 : 
+
+    Les variables les mieux représentées :
+    
+    + VADO : $0.73$
+    + SOLD     : $0.62$  
+  
+* AXE 2 : 
+
+    Les variables les mieux représentées :
+    
+    + NBPR : $0.59$
+    + NEMP : $0.45$  
+
+
+* AXE 3 : 
+
+    Les variables les mieux représentées :
+    
+    + VARR : $0.47$
+
+* AXE 4 : 
+
+    Les variables les mieux représentées :
+    
+    + MDEC : $0.38$
+    
+* AXE 5 : 
+
+    Les variables ne sont pas bien représentées. 
+
+
+```{r}
+fviz_contrib(ClientsBanque.acp, choice = "ind", axes = 1, top = 10)
+```
+
+
+* AXE 1:
+
+    Les individus contribuant le plus à la formation de cet axe: 
+    
+    + CL30 : $16.09\%$
+    + CL27 : $13.58\%$
+    
+```{r}
+fviz_contrib(ClientsBanque.acp, choice = "ind", axes = 2, top = 10)
+```
+
+* AXE 2:
+
+    Les individus contribuant le plus à la formation de cet axe: 
+    
+    + CL46 : $23.96\%$
+    
+```{r}
+fviz_contrib(ClientsBanque.acp, choice = "ind", axes = 3, top = 10)
+```
+
+* AXE 3:
+
+    Les individus contribuant le plus à la formation de cet axe: 
+    
+    + CL14 : $12.64\%$
+    + CL36 : $11.07\%$
+    + CL10 : $10.28\%$
+    
+  ```{r}
+fviz_contrib(ClientsBanque.acp, choice = "ind", axes = 4, top = 10)
+```
+
+* AXE 4:
+
+    Les individus contribuant le plus à la formation de cet axe: 
+    
+    + CL15 : $9.15\%$
+    + CL16 : $8.69\%$
+    + CL20 : $7.22\%$
+    + CL07 : $7.00\%$
+    
+```{r}
+fviz_contrib(ClientsBanque.acp, choice = "ind", axes = 5, top = 10)
+```    
+    
+* AXE 5:
+
+    Les individus contribuant le plus à la formation de cet axe: 
+    
+    + CL48 : $8.09\%$
+    + CL35 : $7.55\%$
+    + CL13 : $6.68\%$
+
+
+
+```{r}
+library(dplyr)
+cos2 <- as.data.frame(ClientsBanque.acp$ind$cos2)
+cos2 %>%
+mutate(`Variables`= rownames(cos2), `Dim 1`=round(`Dim.1`, 2), `Dim 2`=round(`Dim.2`, 2), `Dim 3`=round(`Dim.3`, 2), `Dim 4`=round(`Dim.4`, 2), `Dim 5`=round(`Dim.5`, 2)) %>% 
+select(`Variables`, `Dim 1`, `Dim 2`, `Dim 3`, `Dim 4`, `Dim 5`) %>% 
+formattable(align=rep('c',4), list(`Dim 1`=color_tile("#DeF7E9", "#71CA97"), `Dim 2`=color_tile("#DeF7E9", "#71CA97"), `Dim 3`=color_tile("#DeF7E9", "#71CA97"), `Dim 4`=color_tile("#DeF7E9", "#71CA97"), `Dim 5`=color_tile("#DeF7E9", "#71CA97")))
+```
+
+* AXE 1 : 
+
+    Les Clients les mieux représentées :
+    
+    + CL49 : $0.79$
+    + CL27 : $0.77$
+    + CL18 : $0.74$  
+    + CL30 : $0.64$
+    + CL40 : $0.63$
+    + CL21 : $0.59$
+    + CL02 : $0.52$
+
+* AXE 2 : 
+
+    Les Clients les mieux représentées :
+    
+    + CL41 : $0.63$
+    + CL05 : $0.59$
+    + CL11 : $0.56$  
+    + CL04 : $0.54$
+    + CL45 : $0.52$
+    + CL03 : $0.51$
+    + CL46 : $0.51$
+    
+* AXE 3 : 
+
+    Les Clients les mieux représentées :
+    
+    + CL36 : $0.59$
+    + CL09 : $0.43$
+    + CL48 : $0.33$  
+    + CL17 : $0.30$
+
+* AXE 4 : 
+
+    Les Clients les mieux représentées :
+    
+    + CL16 : $0.75$
+    + CL15 : $0.51$
+  
+* AXE 5 : 
+
+    Les Clients les mieux représentées :
+    
+    + CL48 : $0.36$  
+    + CL13 : $0.34$
+    + CL35 : $0.33$
+    + CL28 : $0.32$
+
+##### Synthèse des trois premiers axes 
+
+* AXE 1: 
+ 
+      Cet axe est celui qui représente le mieux la variance des données. Donc, les clients contribuant fortement à sa formation sont ceux qui ont des valeurs élevées ou faibles de leur solde, ou par des variations importantes sur leur dépôts d'épargne.
+      
+* AXE 2 : 
+
+     Les clients contribuant le plus au deuxième axe sont ceux dont le nombre d'emprunts, et le nombre de produits de la banque utilisés varie le plus. Effectivement, ces variables possèdent des valeurs extrement éloignées de la moyenne et qu'on retrouve chez ces clients. 
+    
+* AXE 3 : 
+  
+    Cet axe est celui qui représente au mieux la variance des variables liées au pourcentage de variation des retraits sur les dépôts d'épargne, le montant total des dépôts et le montant total des emprunts. En observant la distribution de ces variables, on a remarqué des valeurs extrêmes. Donc les clients contribuants le plus à la formation de cet axe sont donc ceux qui possèdent ces valeurs. 
+    
+ 
+##### Analyse des projections des variables 
+
+Les coordonnées des variables sur chaque axe correspondent au coefficient de corrélation entre chacune d'elles avec l'axe. Une coordonnées positive désigne une corrélation positive, une coordonnée négative désigne une corrélation négative. 
+
+```{r}
+fviz_pca_var(ClientsBanque.acp, col.var = "cos2",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE # Évite le chevauchement de texte
+             )
+```
+
+      
+Sur ce premier plan factoriel, on observe que les variables **VADO**, **NDEC**, **NBPR** sont très bien représentées. 
+
+On remarque que les **SOLD** et **VADO** sont fortement corrélées entre elles, et aussi toutes les deux fortement corrélées au premier axe. Elles contribuent positivement à sa formation. 
+
+Les variables **NDEC** et **MDEC**, **CHEQ** sont positionnées sur les côtès opposés de l'origine par rapport aux deux axes, c'est à dire qu'elles sont corrélés négativement sur ces deux axes. On observe le même phénomène avec les deux variables **RETR** et **DEPO**.
+  
+La variable **VARR** contribue négativement à la formation du premier axe, elle est faiblement corrélé à cet axe, mais ne l'est pas du tout avec le deuxième axe.
+
+La variable **NBPR** et **NEMP** sont fortement corrélée au deuxième axe et contribuent positivement à sa formation.
+
+En ce qui concerne les variables supplémentaires, on remarque qu'elles ne sont pas bien représentées sur ce plan factoriel. La variable **TAIL** est fortement corrélée à la variable **CHEQ**. 
+
+
+#### Analyser la projection des 50 clients dans le premier plan factoriel
+
+Pour faire cette analyse, on va utiliser les information qu'on a tiré du cercle de corrélation. Plus un client possède une valeur extrême d'une variable, plus il sera proche du point représentée par cette variable. Ici, les coordonnées de chaque individu est calculé en faisant la projection sur chaque axe. 
+```{r}
+fviz_pca_ind(ClientsBanque.acp, repel = TRUE,
+                col.var = "#2E9FDF", # Couleur des variables
+                col.ind = "#696969"  # Couleur des individues
+                )
+```
+On remarque qu'il y a des clients isolés :
+
++ CL46 : très proche de l'axe 2, C'est le client qui a contracté le plus grand nombre d'emprunts. 
++ CL30 : très proche de l'axe 1, c'est le client qui a le solde le plus élevé. 
++ CL27 : ce client est attiré vers le premier axe mais pas totalement, il est caractérisé à la fois d'un solde et d'un montant total des dépôts élevés mais aussi d'une forte variation sur se dépôts d'épargne.
+
+
+* AXE 1 : 
+Les clients se trouvant à droite ont un **solde élevé**. Ces mêmes clients ont tirés des **sommes élevés** par chèque. Plus un client est à gauche, plus son solde est moins élevé, et la somme qu'il retire avec des chèques est **petite**.  
+
+Les clients les plus à droite ont une **variation positive très élevé** dans leur dépôts d'épargne. plus on se rapporche du premier axe, plus la variation est moindre. Les clients à gauche de cet axe, ont une **variation négative**.
+
+Les clients à gauche de cet axe ont au moins eu **$1$** découvert pendant l'année passée. Mais la quasi totalité des clients se trouvant à droit ont **aucun** découvert. 
+
+On peut alors conclure que cet axe sépare les clients aisés et les moins aisés. 
+
+* AXE 2: 
+
+Les clients les plus tirés vers le haut sont ceux qui effectuent le **plus de retraits** sur leur comptes d'épargne, et ceux qui utilisent le **plus** d'**autres produits** de la banque. 
+
+Les clients les plus tirés en bas à gauche sont ceux dont le **montant des découverts** est **important**. 
+
+Les clients en haut de cet axe ont contracté **beaucoup** d'**emprunts** l'année dernière. Plus le client se trouve en bas de cet axe, plus il emprunte moins. 
+
+On peut alors dire que cet axe sépare les clients qui **investissent beaucoup** et ceux qui **investissent moins**. 
+
+
+#### Groupes de clients
+
+ce plan suggère deux groupes de clients. 
+
+# Classification ascendante hiérarchique 
+
+##### Réalisation de la CAH
+```{r}
+ClientsBanque.acp2 <- PCA(ClientsBanque, scale.unit = TRUE, graph = FALSE)
+ClientsBanque.hcpc <- HCPC(ClientsBanque.acp2, graph = FALSE)
+```
+
+##### Visualisation du dendogramme 
+Le dendogramme suggère une solution à 3 groupes. On voit que le groupe bleu se forme plus rapidement que les deux autres. 
+```{r}
+fviz_dend(ClientsBanque.hcpc, 
+          cex = 0.7,                     # Taille du text
+          palette = "jco",               # Palette de couleur ?ggpubr::ggpar
+          rect = TRUE, rect_fill = TRUE, # Rectangle autour des groupes
+          rect_border = "jco",           # Couleur du rectangle
+          labels_track_height = 0.8      # Augment l'espace pour le texte
+          )
+
+```
+
+##### Caractérisation des clusters par les variables actives 
+
+Les p-valeur des tests du khi_2 révèlent sur quelles variables se repose le plus l'algorithme HCPC  pour former les clusters, et aussi par quelles catégories est caractérisé chaque cluster. 
+
+La valeur de la statistique du test désigne la corrélation entre chaque variable et le cluster. Donc les v.test positifs (resp. négatifs) désignent une corrélation positive(resp. négative). La p-value évalue la significativité des corrélations. 
+
+Dans ce qui suit on met en évidence uniquement les variables positivement corrélées avec une classe, car ce sont celles-ci qui contribuent à construire son caractère.
+
+* Cluster 1 :
+
+```{r, echo=FALSE}
+kable( as.data.frame(ClientsBanque.hcpc$desc.var$quanti$'1')) 
+```
+
+Les variables qui caractérisent le plus ce cluster sont **NDEC** et **MDEC**. On remarque que les p-value sont quasi nulles, donc il y a une forte association entre ces variables et ce cluster.
+
+
+* Cluster 2 : 
+
+```{r, echo=FALSE}
+kable(as.data.frame(ClientsBanque.hcpc$desc.var$quanti$'2')) 
+```
+On remarque ici que beaucoup de variables sont positivement corrélées à ce cluster. Mais celles qui caractérisent le plus ce cluster sont **NBPR**, **RETR** et **AGEC**.
+
+* Cluster 3 : 
+
+```{r, echo=FALSE}
+kable(as.data.frame(ClientsBanque.hcpc$desc.var$quanti$'3')) 
+```
+Les variables qui caractérisent le plus ce cluster sont **VADO**, **SOLD**, **DEPO** et **CHEQ**. Leurs corrélation avec ce cluster est très significative. En particulier les deux variables **VADO** et **SOLD** sont celles qui décident le plus de l'appartenance d'un individus à ce cluster.
+
+##### Déduire une tendance de la typologie de chaque classe 
+
+Pour cela on va se baser sur les valeurs des moyennes, variance d'une variable au sein de chaque classe par rapport à la moyenne, variance d'une variable de la totalité des données.  
+
+* Cluster 1 : 
+    
+    + Les moyennes des variables **NDEC** et **MDEC**  sont très grandes ($\approx 3$ et $2$ fois plus élevées)  par rapport à l'ensemble des données. 
+    
+    + On remarque que la moyenne d'âge des clients de ce cluster est de $24$ ans pour une moyenne de clientèle de $39$ ans. 
+    
+    + Les clients classés dans ce cluster sont jeunes (étudiant, jeunes actifs), ont tendance à avoir un nombre important de découverts avec des montants élevés. 
+    
+* Cluster 3 : 
+
+    + **VADO**, **SOLD**, **DEPO** et **CHEQ** prennent des valeurs très grandes ($\approx 2.9$, $2.7$, $1.5$ fois plus élevées) comparées aux moyennes de l'ensemble des données.   
+    + Par contre, on remarque dans ce cluster que les moyennes **NDEC** et **MDEC** sont inférieures à la moyenne. 
+    
+    + Les individus de ce groupe disposent de sommes importantes dans leurs comptes bancaires et ont une variation positive dans leurs dépôts d'épargne. Leurs comptes sont très peu à découvert, et même s'ils le sont c'est pour de petits montants. 
+    
+* Cluster 2 : 
+
+    +  **NBPR**, **RETR** et **AGEC** prennent en moyenne des valeurs légèrement en dessus de la moyenne globale.
+    
+    + En particulier, les parts des variances de ces variables exprimées dans ce cluster avoisine $1$. Ce qui veut dire que la quasi totalité des clients ayant des valeurs proches de la moyenne de ces variables sont dans ce cluster.
+    
+    + On peut donc dire que les clients de cette classe ont tendance à être d'un certain âge, à utiliser 3 ou 4 autres produits de la banque et effectuent beaucoup de retraits.
+```{r}
+ClientsBanqueplusGroupe <- as.data.frame(read_excel("/home/lila/Documents/GIS4/semestre1/SE/TP5/ClientsBanqueplusGroupe.xlsx"))
+ClientsBanque <- as.data.frame( cbind(ClientsBanque,ClientsBanqueplusGroupe['Groupe']))
+ClientsBanque.acp3 <- PCA(ClientsBanque, scale.unit = TRUE, quali.sup = 14, graph = TRUE)
+fviz_pca_ind(ClientsBanque.acp3, habillage = 14,
+             addEllipses =TRUE,
+             palette = "jco", repel = TRUE) 
+fviz_cluster(ClientsBanque.hcpc,
+             repel = TRUE,            # Evite le chevauchement des textes
+             show.clust.cent = TRUE, # Montre le centre des clusters
+             palette = "jco",         # Palette de couleurs, voir ?ggpubr::ggpar
+             ggtheme = theme_minimal(),
+             main = "Factor map"
+             )
+
+```
+
+On peut voir ici que la classification hiérarchique sur les composantes principales a su classer la plupart des individus des groupes $2$ et $3$, mais a confondu plus de la moitié des individus du groupe $1$ dans le groupe $2$. Celà peut être du à la variable **SOLD** car la part de sa variance exprimée dans le cluster 1 est de $11\%$. Et comme ces clients n'ont pas des montants très élevés ils sont classées dans le cluster $2$ plutôt que dans le cluster $3$.
+
+
+    
